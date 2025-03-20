@@ -293,3 +293,9 @@ func deleteConnection(c *gin.Context) {
 	db.Delete(&connection)
 	c.JSON(http.StatusOK, gin.H{"message": "接続が削除されました"})
 }
+
+// docker run --name mysql \
+//   -p 3306:3306 \
+//   -e MYSQL_ROOT_PASSWORD=password \
+//   -e MYSQL_DATABASE=mindmap_db \
+//   -d mysql:latest
