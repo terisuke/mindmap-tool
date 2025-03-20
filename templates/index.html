@@ -1,18 +1,737 @@
 <!DOCTYPE html>
 <html lang="ja">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Mindmap Tool</title>
-    <link rel="stylesheet" href="/static/css/style.css">
-</head>
-<body>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>マインドマップツール</title>
+    <style>
+      body {
+        font-family: "Helvetica Neue", Arial, sans-serif;
+        margin: 0;
+        padding: 0;
+        background-color: #f5f5f5;
+      }
+      .container {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 20px;
+      }
+      .header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 20px;
+      }
+      .mindmap-container {
+        background-color: white;
+        border-radius: 8px;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        padding: 20px;
+        min-height: 600px;
+        position: relative;
+      }
+      .node {
+        position: absolute;
+        min-width: 100px;
+        padding: 10px 15px;
+        background-color: #3498db;
+        color: white;
+        border-radius: 5px;
+        box-shadow: 0 1px 5px rgba(0, 0, 0, 0.2);
+        cursor: move;
+        user-select: none;
+        text-align: center;
+      }
+      .root-node {
+        background-color: #2c3e50;
+      }
+      .connection {
+        position: absolute;
+        height: 2px;
+        background-color: #95a5a6;
+        transform-origin: left center;
+        pointer-events: none;
+      }
+      .connection-label {
+        position: absolute;
+        background-color: white;
+        padding: 2px 5px;
+        border-radius: 3px;
+        font-size: 12px;
+        pointer-events: none;
+      }
+      .connection.selected {
+        background-color: #e74c3c;
+      }
+      .connection:hover {
+        cursor: pointer;
+      }
+      .node.connecting {
+        border: 2px dashed #e74c3c;
+      }
+      .controls {
+        margin-bottom: 20px;
+      }
+      button {
+        background-color: #3498db;
+        color: white;
+        border: none;
+        padding: 8px 15px;
+        border-radius: 4px;
+        cursor: pointer;
+        margin-right: 10px;
+      }
+      button:hover {
+        background-color: #2980b9;
+      }
+      input[type="text"] {
+        padding: 8px;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        width: 250px;
+      }
+      #mapTitle {
+        font-size: 18px;
+        font-weight: bold;
+      }
+      .node-menu {
+        position: absolute;
+        background-color: white;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        padding: 5px 0;
+        z-index: 100;
+      }
+      .node-menu button {
+        display: block;
+        width: 100%;
+        text-align: left;
+        padding: 8px 15px;
+        background-color: transparent;
+        color: #333;
+        border: none;
+        cursor: pointer;
+      }
+      .node-menu button:hover {
+        background-color: #f5f5f5;
+      }
+      .maps-list {
+        margin-top: 20px;
+      }
+    </style>
+  </head>
+  <body>
     <div class="container">
-        <h1>Mindmap Tool</h1>
-        <div id="mindmap-container">
-            <!-- マインドマップがここに表示されます -->
+      <div class="header">
+        <h1>マインドマップツール</h1>
+        <div>
+          <input
+            type="text"
+            id="searchInput"
+            placeholder="マインドマップを検索..."
+          />
         </div>
+      </div>
+
+      <div class="controls">
+        <input
+          type="text"
+          id="mapTitle"
+          placeholder="マインドマップのタイトル"
+        />
+        <button id="newMap">新規マップ</button>
+        <button id="saveMap">保存</button>
+        <button id="addNode">ノード追加</button>
+        <button id="connectNodes">ノード接続</button>
+        <button id="exportPNG">PNG出力</button>
+      </div>
+
+      <div class="mindmap-container" id="mindmap"></div>
+
+      <div class="maps-list" id="mapsList">
+        <h2>保存したマインドマップ</h2>
+        <div id="mapsContainer"></div>
+      </div>
     </div>
-    <script src="/static/js/main.js"></script>
-</body>
-</html> 
+
+    <div class="node-menu" id="nodeMenu" style="display: none">
+      <button id="editNode">編集</button>
+      <button id="addChildNode">子ノード追加</button>
+      <button id="deleteNode">削除</button>
+    </div>
+
+    <script>
+      document.addEventListener("DOMContentLoaded", function () {
+        // マインドマップの状態を管理
+        let currentMapId = null;
+        let nodes = [];
+        let connections = [];
+        let draggedNode = null;
+        let offsetX = 0;
+        let offsetY = 0;
+        let selectedNode = null;
+        let isConnecting = false;
+        let sourceNode = null;
+        let connectionLabels = [];
+
+        const mindmapContainer = document.getElementById("mindmap");
+        const nodeMenu = document.getElementById("nodeMenu");
+        const mapTitle = document.getElementById("mapTitle");
+
+        // 新規マップ作成
+        document
+          .getElementById("newMap")
+          .addEventListener("click", function () {
+            if (!mapTitle.value.trim()) {
+              alert("マップのタイトルを入力してください");
+              return;
+            }
+
+            currentMapId = null;
+            nodes = [];
+            connections = [];
+            clearMindmap();
+
+            // ルートノードを作成
+            createNode("新しいアイデア", null, {
+              x: mindmapContainer.offsetWidth / 2 - 50,
+              y: mindmapContainer.offsetHeight / 2 - 20,
+            });
+            renderMindmap();
+          });
+
+        // マップ保存
+        document
+          .getElementById("saveMap")
+          .addEventListener("click", function () {
+            if (!mapTitle.value.trim()) {
+              alert("マップのタイトルを入力してください");
+              return;
+            }
+
+            const mapData = {
+              title: mapTitle.value,
+              user_id: 1, // テストユーザーのID
+            };
+
+            if (currentMapId) {
+              // 既存マップの更新
+              fetch(`/api/mindmaps/${currentMapId}`, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(mapData),
+              })
+                .then((response) => response.json())
+                .then((savedMap) => {
+                  saveNodes(savedMap.id);
+                  alert("マップが更新されました");
+                })
+                .catch((error) => console.error("Error:", error));
+            } else {
+              // 新規マップの作成
+              fetch("/api/mindmaps", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(mapData),
+              })
+                .then((response) => response.json())
+                .then((savedMap) => {
+                  currentMapId = savedMap.id;
+                  saveNodes(savedMap.id);
+                  alert("新しいマップが作成されました");
+                  loadMindmapsList();
+                })
+                .catch((error) => console.error("Error:", error));
+            }
+          });
+
+        // ノードの保存
+        function saveNodes(mapId) {
+          // 既存のノードを削除（実際のアプリではもっと効率的な方法を使用）
+          if (currentMapId) {
+            fetch(`/api/mindmaps/${mapId}`, {
+              method: "GET",
+            })
+              .then((response) => response.json())
+              .then((mapData) => {
+                // 既存のノードを削除
+                const deletePromises = mapData.nodes.map((node) =>
+                  fetch(`/api/nodes/${node.id}`, { method: "DELETE" })
+                );
+
+                Promise.all(deletePromises).then(() => {
+                  // 新しいノードを保存
+                  saveNewNodes(mapId);
+                });
+              })
+              .catch((error) => console.error("Error:", error));
+          } else {
+            saveNewNodes(mapId);
+          }
+        }
+
+        // 新しいノードの保存
+        function saveNewNodes(mapId) {
+          const nodePromises = nodes.map((node) => {
+            const nodeData = {
+              map_id: mapId,
+              text: node.text,
+              parent_id: node.parentId,
+              position: JSON.stringify({ x: node.x, y: node.y }),
+            };
+
+            return fetch("/api/nodes", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(nodeData),
+            });
+          });
+
+          Promise.all(nodePromises)
+            .then(() => console.log("All nodes saved"))
+            .catch((error) => console.error("Error saving nodes:", error));
+        }
+
+        // マインドマップ一覧の読み込み
+        function loadMindmapsList() {
+          fetch("/api/mindmaps")
+            .then((response) => response.json())
+            .then((maps) => {
+              const mapsContainer = document.getElementById("mapsContainer");
+              mapsContainer.innerHTML = "";
+
+              maps.forEach((map) => {
+                const mapItem = document.createElement("div");
+                mapItem.style.padding = "10px";
+                mapItem.style.margin = "5px 0";
+                mapItem.style.backgroundColor = "#fff";
+                mapItem.style.borderRadius = "4px";
+                mapItem.style.boxShadow = "0 1px 3px rgba(0,0,0,0.1)";
+                mapItem.style.cursor = "pointer";
+
+                mapItem.innerHTML = `
+                                <div style="display:flex;justify-content:space-between;align-items:center">
+                                    <div>${map.title}</div>
+                                    <div>
+                                        <small>${new Date(
+                                          map.created_at
+                                        ).toLocaleDateString()}</small>
+                                        <button class="delete-map" data-id="${
+                                          map.id
+                                        }" style="margin-left:10px">削除</button>
+                                    </div>
+                                </div>
+                            `;
+
+                mapItem.addEventListener("click", function (e) {
+                  if (!e.target.classList.contains("delete-map")) {
+                    loadMindmap(map.id);
+                  }
+                });
+
+                mapsContainer.appendChild(mapItem);
+              });
+
+              // 削除ボタンのイベントハンドラ
+              document.querySelectorAll(".delete-map").forEach((button) => {
+                button.addEventListener("click", function (e) {
+                  e.stopPropagation();
+                  const mapId = this.getAttribute("data-id");
+                  if (confirm("このマインドマップを削除しますか？")) {
+                    fetch(`/api/mindmaps/${mapId}`, { method: "DELETE" })
+                      .then(() => loadMindmapsList())
+                      .catch((error) => console.error("Error:", error));
+                  }
+                });
+              });
+            })
+            .catch((error) => console.error("Error:", error));
+        }
+
+        // マインドマップの読み込み
+        function loadMindmap(mapId) {
+          fetch(`/api/mindmaps/${mapId}`)
+            .then((response) => response.json())
+            .then((map) => {
+              currentMapId = map.id;
+              mapTitle.value = map.title;
+
+              nodes = map.nodes.map((node) => {
+                const position = JSON.parse(node.position);
+                return {
+                  id: node.id,
+                  text: node.text,
+                  parentId: node.parent_id,
+                  x: position.x,
+                  y: position.y,
+                  from_connections: node.from_connections,
+                  to_connections: node.to_connections,
+                };
+              });
+
+              renderMindmap();
+            })
+            .catch((error) => console.error("Error:", error));
+        }
+
+        // マインドマップのレンダリング
+        function renderMindmap() {
+          clearMindmap();
+
+          nodes.forEach((node) => {
+            const nodeElement = document.createElement("div");
+            nodeElement.className = "node";
+            nodeElement.textContent = node.text;
+            nodeElement.dataset.id = node.id;
+            nodeElement.style.left = `${node.x}px`;
+            nodeElement.style.top = `${node.y}px`;
+
+            if (!node.parentId) {
+              nodeElement.classList.add("root-node");
+            }
+
+            // 接続モード時のクリックイベント
+            nodeElement.addEventListener("click", function (e) {
+              if (isConnecting) {
+                if (!sourceNode) {
+                  sourceNode = node;
+                  nodeElement.classList.add("connecting");
+                } else {
+                  if (sourceNode.id !== node.id) {
+                    createConnection(sourceNode.id, node.id);
+                    sourceNode = null;
+                    nodeElement.classList.remove("connecting");
+                    document
+                      .querySelector(`[data-id="${sourceNode.id}"]`)
+                      .classList.remove("connecting");
+                  }
+                }
+              }
+            });
+
+            // ノードのドラッグ処理
+            nodeElement.addEventListener("mousedown", function (e) {
+              draggedNode = node;
+              selectedNode = nodeElement;
+              offsetX = e.clientX - node.x;
+              offsetY = e.clientY - node.y;
+
+              document.addEventListener("mousemove", onMouseMove);
+              document.addEventListener("mouseup", onMouseUp);
+            });
+
+            // コンテキストメニュー
+            nodeElement.addEventListener("contextmenu", function (e) {
+              e.preventDefault();
+              selectedNode = nodeElement;
+
+              nodeMenu.style.left = `${e.pageX}px`;
+              nodeMenu.style.top = `${e.pageY}px`;
+              nodeMenu.style.display = "block";
+            });
+
+            mindmapContainer.appendChild(nodeElement);
+          });
+
+          drawConnections();
+        }
+
+        // 接続の作成
+        function createConnection(fromNodeId, toNodeId) {
+          const connectionData = {
+            from_node_id: fromNodeId,
+            to_node_id: toNodeId,
+            label: prompt("接続のラベルを入力（オプション）:", ""),
+          };
+
+          fetch("/api/connections", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(connectionData),
+          })
+            .then((response) => response.json())
+            .then((connection) => {
+              connections.push(connection);
+              renderMindmap();
+            })
+            .catch((error) => console.error("Error:", error));
+        }
+
+        // 接続線の描画を更新
+        function drawConnections() {
+          connections.forEach((conn) => conn.remove());
+          connectionLabels.forEach((label) => label.remove());
+          connections = [];
+          connectionLabels = [];
+
+          nodes.forEach((node) => {
+            // 親子関係の接続線
+            if (node.parentId) {
+              const parent = nodes.find((n) => n.id === node.parentId);
+              if (parent) {
+                drawConnectionLine(parent, node);
+              }
+            }
+
+            // 自由な接続線
+            node.from_connections?.forEach((connection) => {
+              const toNode = nodes.find((n) => n.id === connection.to_node_id);
+              if (toNode) {
+                const connectionElement = drawConnectionLine(
+                  node,
+                  toNode,
+                  connection
+                );
+                if (connection.label) {
+                  addConnectionLabel(connectionElement, connection.label);
+                }
+              }
+            });
+          });
+        }
+
+        // 接続線の描画
+        function drawConnectionLine(fromNode, toNode, connection = null) {
+          const connectionElement = document.createElement("div");
+          connectionElement.className = "connection";
+          if (connection) {
+            connectionElement.dataset.id = connection.id;
+            connectionElement.addEventListener("click", function (e) {
+              if (confirm("この接続を削除しますか？")) {
+                deleteConnection(connection.id);
+              }
+            });
+          }
+
+          const dx = toNode.x - fromNode.x;
+          const dy = toNode.y - fromNode.y;
+          const distance = Math.sqrt(dx * dx + dy * dy);
+          const angle = (Math.atan2(dy, dx) * 180) / Math.PI;
+
+          connectionElement.style.width = `${distance}px`;
+          connectionElement.style.left = `${fromNode.x + 50}px`;
+          connectionElement.style.top = `${fromNode.y + 20}px`;
+          connectionElement.style.transform = `rotate(${angle}deg)`;
+
+          mindmapContainer.appendChild(connectionElement);
+          connections.push(connectionElement);
+          return connectionElement;
+        }
+
+        // 接続ラベルの追加
+        function addConnectionLabel(connectionElement, label) {
+          const labelElement = document.createElement("div");
+          labelElement.className = "connection-label";
+          labelElement.textContent = label;
+
+          const rect = connectionElement.getBoundingClientRect();
+          const containerRect = mindmapContainer.getBoundingClientRect();
+
+          labelElement.style.left = `${
+            rect.left + rect.width / 2 - containerRect.left
+          }px`;
+          labelElement.style.top = `${rect.top - containerRect.top}px`;
+
+          mindmapContainer.appendChild(labelElement);
+          connectionLabels.push(labelElement);
+        }
+
+        // 接続の削除
+        function deleteConnection(connectionId) {
+          fetch(`/api/connections/${connectionId}`, {
+            method: "DELETE",
+          })
+            .then((response) => response.json())
+            .then(() => {
+              connections = connections.filter(
+                (conn) => conn.dataset.id !== connectionId.toString()
+              );
+              renderMindmap();
+            })
+            .catch((error) => console.error("Error:", error));
+        }
+
+        // マウス移動時のイベントハンドラ
+        function onMouseMove(e) {
+          if (draggedNode) {
+            const x = e.clientX - offsetX;
+            const y = e.clientY - offsetY;
+
+            draggedNode.x = x;
+            draggedNode.y = y;
+
+            selectedNode.style.left = `${x}px`;
+            selectedNode.style.top = `${y}px`;
+
+            drawConnections();
+          }
+        }
+
+        // マウスアップ時のイベントハンドラ
+        function onMouseUp() {
+          draggedNode = null;
+          document.removeEventListener("mousemove", onMouseMove);
+          document.removeEventListener("mouseup", onMouseUp);
+        }
+
+        // マインドマップのクリア
+        function clearMindmap() {
+          while (mindmapContainer.firstChild) {
+            mindmapContainer.removeChild(mindmapContainer.firstChild);
+          }
+          connections = [];
+        }
+
+        // ノードの作成
+        function createNode(text, parentId, position) {
+          const nodeId = Date.now();
+          const node = {
+            id: nodeId,
+            text: text,
+            parentId: parentId,
+            x: position.x,
+            y: position.y,
+          };
+
+          nodes.push(node);
+          return node;
+        }
+
+        // 新規ノード追加ボタン
+        document
+          .getElementById("addNode")
+          .addEventListener("click", function () {
+            const rootNode = nodes.find((n) => !n.parentId);
+            if (!rootNode) {
+              alert("まずルートノードを作成してください");
+              return;
+            }
+
+            const text = prompt(
+              "新しいノードのテキストを入力:",
+              "新しいアイデア"
+            );
+            if (text) {
+              const x = rootNode.x + Math.random() * 100 - 50;
+              const y = rootNode.y + Math.random() * 100 + 50;
+              createNode(text, rootNode.id, { x, y });
+              renderMindmap();
+            }
+          });
+
+        // ノードメニューの操作
+        document
+          .getElementById("editNode")
+          .addEventListener("click", function () {
+            if (selectedNode) {
+              const nodeId = parseInt(selectedNode.dataset.id);
+              const node = nodes.find((n) => n.id === nodeId);
+
+              const text = prompt("ノードテキストを編集:", node.text);
+              if (text) {
+                node.text = text;
+                selectedNode.textContent = text;
+              }
+
+              nodeMenu.style.display = "none";
+            }
+          });
+
+        document
+          .getElementById("addChildNode")
+          .addEventListener("click", function () {
+            if (selectedNode) {
+              const nodeId = parseInt(selectedNode.dataset.id);
+              const parentNode = nodes.find((n) => n.id === nodeId);
+
+              const text = prompt(
+                "子ノードのテキストを入力:",
+                "新しいアイデア"
+              );
+              if (text) {
+                const x = parentNode.x + 150;
+                const y = parentNode.y + Math.random() * 60 - 30;
+                createNode(text, nodeId, { x, y });
+                renderMindmap();
+              }
+
+              nodeMenu.style.display = "none";
+            }
+          });
+
+        document
+          .getElementById("deleteNode")
+          .addEventListener("click", function () {
+            if (selectedNode) {
+              const nodeId = parseInt(selectedNode.dataset.id);
+              const nodeIndex = nodes.findIndex((n) => n.id === nodeId);
+
+              if (nodeIndex !== -1) {
+                const node = nodes[nodeIndex];
+
+                // ルートノードは削除できない
+                if (!node.parentId && nodes.length > 1) {
+                  alert("ルートノードは削除できません");
+                  nodeMenu.style.display = "none";
+                  return;
+                }
+
+                // 子ノードも削除
+                const childNodes = [];
+                findAllChildren(nodeId, childNodes);
+
+                // 逆順で削除（子から親へ）
+                childNodes.reverse().forEach((childId) => {
+                  const index = nodes.findIndex((n) => n.id === childId);
+                  if (index !== -1) {
+                    nodes.splice(index, 1);
+                  }
+                });
+
+                nodes.splice(nodeIndex, 1);
+                renderMindmap();
+              }
+
+              nodeMenu.style.display = "none";
+            }
+          });
+
+        // 再帰的に子ノードを探す
+        function findAllChildren(parentId, result) {
+          nodes.forEach((node) => {
+            if (node.parentId === parentId) {
+              result.push(node.id);
+              findAllChildren(node.id, result);
+            }
+          });
+        }
+
+        // PNGエクスポート
+        document
+          .getElementById("exportPNG")
+          .addEventListener("click", function () {
+            // 実際のアプリではCanvas経由でPNG化する処理を実装
+            alert("この機能は実装中です。");
+          });
+
+        // 画面クリックでメニューを閉じる
+        document.addEventListener("click", function () {
+          nodeMenu.style.display = "none";
+        });
+
+        // 接続モードの切り替え
+        document
+          .getElementById("connectNodes")
+          .addEventListener("click", function () {
+            isConnecting = !isConnecting;
+            this.style.backgroundColor = isConnecting ? "#e74c3c" : "#3498db";
+            this.textContent = isConnecting ? "接続モード終了" : "ノード接続";
+          });
+
+        // 初期化時にマインドマップ一覧を読み込む
+        loadMindmapsList();
+      });
+    </script>
+  </body>
+</html>
