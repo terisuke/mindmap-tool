@@ -222,12 +222,20 @@
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(mapData),
               })
-                .then((response) => response.json())
+                .then((response) => {
+                  if (!response.ok) {
+                    throw new Error("マップの更新に失敗しました");
+                  }
+                  return response.json();
+                })
                 .then((savedMap) => {
                   saveNodes(savedMap.id);
                   alert("マップが更新されました");
                 })
-                .catch((error) => console.error("Error:", error));
+                .catch((error) => {
+                  console.error("Error:", error);
+                  alert("マップの更新に失敗しました");
+                });
             } else {
               // 新規マップの作成
               fetch("/api/mindmaps", {
@@ -235,44 +243,82 @@
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(mapData),
               })
-                .then((response) => response.json())
+                .then((response) => {
+                  if (!response.ok) {
+                    throw new Error("マップの作成に失敗しました");
+                  }
+                  return response.json();
+                })
                 .then((savedMap) => {
                   currentMapId = savedMap.id;
                   saveNodes(savedMap.id);
                   alert("新しいマップが作成されました");
                   loadMindmapsList();
                 })
-                .catch((error) => console.error("Error:", error));
+                .catch((error) => {
+                  console.error("Error:", error);
+                  alert("マップの作成に失敗しました");
+                });
             }
           });
 
         // ノードの保存
         function saveNodes(mapId) {
-          // 既存のノードを削除（実際のアプリではもっと効率的な方法を使用）
+          if (!mapId) {
+            console.error("Invalid map ID");
+            return;
+          }
+
+          // 既存のノードと接続を削除
           if (currentMapId) {
             fetch(`/api/mindmaps/${mapId}`, {
               method: "GET",
             })
-              .then((response) => response.json())
+              .then((response) => {
+                if (!response.ok) {
+                  throw new Error("マップの取得に失敗しました");
+                }
+                return response.json();
+              })
               .then((mapData) => {
+                // 既存の接続を削除
+                const deleteConnectionPromises = mapData.nodes.flatMap(
+                  (node) => [
+                    ...node.from_connections.map((conn) =>
+                      fetch(`/api/connections/${conn.id}`, { method: "DELETE" })
+                    ),
+                    ...node.to_connections.map((conn) =>
+                      fetch(`/api/connections/${conn.id}`, { method: "DELETE" })
+                    ),
+                  ]
+                );
+
                 // 既存のノードを削除
-                const deletePromises = mapData.nodes.map((node) =>
+                const deleteNodePromises = mapData.nodes.map((node) =>
                   fetch(`/api/nodes/${node.id}`, { method: "DELETE" })
                 );
 
-                Promise.all(deletePromises).then(() => {
-                  // 新しいノードを保存
-                  saveNewNodes(mapId);
-                });
+                return Promise.all([
+                  ...deleteConnectionPromises,
+                  ...deleteNodePromises,
+                ]);
               })
-              .catch((error) => console.error("Error:", error));
+              .then(() => {
+                // 新しいノードと接続を保存
+                saveNewNodesAndConnections(mapId);
+              })
+              .catch((error) => {
+                console.error("Error:", error);
+                alert("ノードの保存に失敗しました");
+              });
           } else {
-            saveNewNodes(mapId);
+            saveNewNodesAndConnections(mapId);
           }
         }
 
-        // 新しいノードの保存
-        function saveNewNodes(mapId) {
+        // 新しいノードと接続を保存
+        function saveNewNodesAndConnections(mapId) {
+          // まずノードを保存
           const nodePromises = nodes.map((node) => {
             const nodeData = {
               map_id: mapId,
@@ -285,12 +331,53 @@
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify(nodeData),
-            });
+            })
+              .then((response) => response.json())
+              .then((savedNode) => {
+                // ノードの接続情報を保存
+                const connectionPromises = [];
+
+                // 親子関係の接続
+                if (node.parentId) {
+                  connectionPromises.push(
+                    fetch("/api/connections", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        from_node_id: node.parentId,
+                        to_node_id: savedNode.id,
+                        label: "親子関係",
+                      }),
+                    })
+                  );
+                }
+
+                // 自由な接続
+                if (node.from_connections) {
+                  node.from_connections.forEach((connection) => {
+                    connectionPromises.push(
+                      fetch("/api/connections", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                          from_node_id: savedNode.id,
+                          to_node_id: connection.to_node_id,
+                          label: connection.label,
+                        }),
+                      })
+                    );
+                  });
+                }
+
+                return Promise.all(connectionPromises);
+              });
           });
 
           Promise.all(nodePromises)
-            .then(() => console.log("All nodes saved"))
-            .catch((error) => console.error("Error saving nodes:", error));
+            .then(() => console.log("All nodes and connections saved"))
+            .catch((error) =>
+              console.error("Error saving nodes and connections:", error)
+            );
         }
 
         // マインドマップ一覧の読み込み
@@ -452,7 +539,14 @@
           })
             .then((response) => response.json())
             .then((connection) => {
-              connections.push(connection);
+              // 接続情報をnodes配列にも保存
+              const fromNode = nodes.find((n) => n.id === fromNodeId);
+              if (fromNode) {
+                if (!fromNode.from_connections) {
+                  fromNode.from_connections = [];
+                }
+                fromNode.from_connections.push(connection);
+              }
               renderMindmap();
             })
             .catch((error) => console.error("Error:", error));
@@ -544,9 +638,19 @@
           })
             .then((response) => response.json())
             .then(() => {
-              connections = connections.filter(
-                (conn) => conn.dataset.id !== connectionId.toString()
-              );
+              // 接続情報をnodes配列からも削除
+              nodes.forEach((node) => {
+                if (node.from_connections) {
+                  node.from_connections = node.from_connections.filter(
+                    (conn) => conn.id !== connectionId
+                  );
+                }
+                if (node.to_connections) {
+                  node.to_connections = node.to_connections.filter(
+                    (conn) => conn.id !== connectionId
+                  );
+                }
+              });
               renderMindmap();
             })
             .catch((error) => console.error("Error:", error));

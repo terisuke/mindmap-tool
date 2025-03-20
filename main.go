@@ -149,7 +149,10 @@ func getAllMindMaps(c *gin.Context) {
 func getMindMap(c *gin.Context) {
 	id := c.Param("id")
 	var mindmap MindMap
-	result := db.Preload("Nodes").First(&mindmap, id)
+	result := db.Preload("Nodes").
+		Preload("Nodes.FromConnections").
+		Preload("Nodes.ToConnections").
+		First(&mindmap, id)
 	if result.Error != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "マインドマップが見つかりません"})
 		return
